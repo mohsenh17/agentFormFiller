@@ -1,19 +1,48 @@
-import { generateText } from "ai";
-import { model } from "./_internal/setup";
-import { createSession } from "./session";
+/**
+ *
+ * Usage:
+ *   npm run dev
+ *   npm run dev -- --workflow healthcareFormBasic
+ *   npm run dev -- --firstName Jane --lastName Smith
+ *   npm run dev -- --headless false     ← show the browser window
+ *
+ * All --key value pairs that match a workflow variable are forwarded as overrides.
+ */
+
+import { runWorkflow } from "./agent";
+import { workflows } from "./workflows";
 
 export async function main() {
-	// This will automatically create a chromium instance, connect, and navigate to the given url.
-	// You are given a playwright page back.
-	const page = await createSession("https://www.google.com");
+  // ── Parse CLI args ──────────────────────────────────────────────────────────
+  const args = process.argv.slice(2);
+  const parsed: Record<string, string> = {};
+  for (let i = 0; i < args.length; i += 2) {
+    parsed[args[i].replace(/^--/, "")] = args[i + 1] ?? "true";
+  }
 
-	console.log("Querying the LLM");
-	// We've given you an model (gemini-3.5-flash), you can use the vercel AI SDK to generate text, setup tools, etc.
-	// Ensure you have set the GOOGLE_GENERATIVE_AI_API_KEY environment variable.
-	const response = await generateText({
-		model,
-		prompt: "How many r's are in strawberry?",
-	});
+  const workflowName = parsed.workflow ?? "healthcareForm";
+  const headless = parsed.headless !== "false";
+  delete parsed.workflow;
+  delete parsed.headless;
 
-	console.log(response.text);
+  const workflow = workflows[workflowName];
+  if (!workflow) {
+    console.error(
+      `Unknown workflow "${workflowName}". Available: ${Object.keys(workflows).join(", ")}`
+    );
+    process.exit(1);
+  }
+
+  // Merge default variables with CLI overrides (bonus #3 – dynamic variables)
+  const variables: Record<string, string> = { ...workflow.defaultVariables, ...parsed };
+
+  console.log(`\n Magical Agent — workflow: "${workflowName}"`);
+
+  const result = await runWorkflow({
+    instructions: workflow.instructions,
+    variables,
+    headless,
+  });
+
+  process.exit(result.success ? 0 : 1);
 }
