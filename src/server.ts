@@ -32,10 +32,19 @@ import express, { Request, Response } from "express";
 import * as cron from "node-cron";
 import { runWorkflow, WorkflowResult } from "./agent";
 import { workflows } from "./workflows";
+import cors from "cors";
+import path from "path";
 
 const app = express();
 app.use(express.json());
-
+app.use(express.static(path.join(__dirname, "../public")));
+app.use(cors());
+app.use(express.json());
+app.get("/", (_req, res) => {
+  res.sendFile(
+    path.join(__dirname, "../public/dashboard.html")
+  );
+});
 const PORT = process.env.PORT ?? 3000;
 const serverStart = Date.now();
 
@@ -128,6 +137,7 @@ app.post("/schedule/enable", (req: Request, res: Response) => {
 
   const workflowName: string = req.body.workflow ?? "healthcareForm";
   const workflow = workflows[workflowName];
+
   if (!workflow) {
     res.status(400).json({ error: `Unknown workflow "${workflowName}"` });
     return;
@@ -138,21 +148,55 @@ app.post("/schedule/enable", (req: Request, res: Response) => {
     ...(req.body.variables ?? {}),
   };
 
-  scheduledConfig = { workflowName, variables };
+  // Get interval from request
+  const intervalMinutes = Number(req.body.intervalMinutes ?? 5);
 
-  // Every 5 minutes
-  scheduledJob = cron.schedule("*/5 * * * *", async () => {
-    console.log(`\n [Cron] Firing: ${workflowName}`);
+  // Validate
+  if (
+    !Number.isInteger(intervalMinutes) ||
+    intervalMinutes < 1 ||
+    intervalMinutes > 10
+  ) {
+    res.status(400).json({
+      error: "intervalMinutes must be an integer between 1 and 10",
+    });
+    return;
+  }
+
+  scheduledConfig = {
+    workflowName,
+    variables,
+  };
+
+  const cronExpression = `*/${intervalMinutes} * * * *`;
+
+  scheduledJob = cron.schedule(cronExpression, async () => {
+    console.log(`\n[Cron] Firing: ${workflowName}`);
+
     try {
-      const result = await runWorkflow({ instructions: workflow.instructions, variables, headless: true });
+      const result = await runWorkflow({
+        instructions: workflow.instructions,
+        variables,
+        headless: true,
+      });
+
       recordRun(workflowName, variables, result, "cron");
     } catch (err) {
       console.error("[Cron] Run failed:", err);
     }
   });
 
-  console.log(`\n Scheduler enabled — "${workflowName}" every 5 minutes`);
-  res.json({ enabled: true, workflowName, variables, message: "Runs every 5 minutes." });
+  console.log(
+    `\nScheduler enabled — "${workflowName}" every ${intervalMinutes} minutes`
+  );
+
+  res.json({
+    enabled: true,
+    workflowName,
+    variables,
+    intervalMinutes,
+    message: `Runs every ${intervalMinutes} minutes.`,
+  });
 });
 
 app.post("/schedule/disable", (_req: Request, res: Response) => {
